@@ -38,24 +38,13 @@ public:
 public:
     double GetData(DSegment wall)
     {
-//        cout << "GetData init_pose : "<<this->init_pose.x()<< '\t' <<this->init_pose.x() <<endl;
+
         DSegment detect_line(DPoint(this->init_pose.x(),this->init_pose.y()),
                              DPoint(this->init_pose.x() + length * cos(angle),this->init_pose.y() + length * sin(angle)));
 
-//        cout<<"sensor start : " << detect_line.first.x() << '\t' << detect_line.first.y()<<endl;
-//        cout<<"sensor end : " << detect_line.second.x() << '\t' << detect_line.second.y()<<endl;
-//        cout<<"wall start : " << wall.first.x() << '\t' << wall.first.y()<<endl;
-//        cout<<"wall end : " << wall.second.x() << '\t' << wall.second.y()<<endl;
-
         std::list<DPoint> lstPoints;
         bg::intersection(detect_line, wall, lstPoints);
-        list<DPoint>::iterator it;
-//        cout << "intersection: " << endl;
-//        for(it = lstPoints.begin();it!=lstPoints.end();it++)
-//        {
-//            cout << it->x() << '\t' << it->y() <<endl;
-//        }
-//        cout << "end intersection: " << endl;
+
         if(!lstPoints.empty())
         {
             return this->data = bg::distance(lstPoints.back(), DPoint(init_pose.x(),init_pose.y()));
@@ -121,12 +110,40 @@ public:
     }
 
     //robot movement update
-    void Move()
+    void Move(DSegment wall)
     {
         if(l_speed == r_speed)
         {
-            Translation2d current_translation(l_speed * delta_t * cos(direction),l_speed * delta_t * sin(direction));
-            center_pose = current_translation * center_pose;
+            // to use center pose
+            DSegment virtual_wall(DPoint(wall.first.x()-5,wall.first.y()),DPoint(wall.second.x()-5,wall.second.y()));
+            double forward_distance = l_speed * delta_t;
+            double wall_angle = atan((wall.second.y() - wall.first.y())/(wall.second.x() - wall.first.x()));
+            DPoint forward_point(center_pose.x() + forward_distance * cos(direction),center_pose.y() + forward_distance * sin(direction));
+            DSegment forward_seg(DPoint(center_pose.x(),center_pose.y()),forward_point);
+            std::list<DPoint> intersction_Points;
+            bg::intersection(virtual_wall, forward_seg, intersction_Points);
+            cout<<"virtual_wall\t1x : " <<virtual_wall.first.x() << "\t1y : " <<virtual_wall.first.y()
+            <<"\t2x : " << virtual_wall.second.x()<<"\t2y : " << virtual_wall.second.y()<<endl;
+            cout<<"forward_seg\t1x : " <<forward_seg.first.x() << "\t1y : " <<forward_seg.first.y()
+                <<"\t2x : " << forward_seg.second.x()<<"\t2y : " << forward_seg.second.y()<<endl;
+
+            if(!intersction_Points.empty())
+            {
+                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.x()));
+                double collision_time = collision_distance / l_speed;
+                double rest_time = delta_t - collision_time;
+                double collision_speed = l_speed * cos(wall_angle - direction);
+                center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
+                Translation2d current_translation(collision_speed * rest_time * cos(wall_angle),collision_speed * rest_time * sin(wall_angle));
+                center_pose = current_translation * center_pose;
+                cout<< "wall_angle: " << wall_angle <<" \trest_time : "<< rest_time
+                <<"\tcollision_speed : "<< collision_speed <<"\tcollision_distance : "<< collision_distance<<"\tcollision_time : "<< collision_time<<endl;
+            }
+            else
+            {
+                Translation2d current_translation(l_speed * delta_t * cos(direction),l_speed * delta_t * sin(direction));
+                center_pose = current_translation * center_pose;
+            }
         }
         else
         {
@@ -187,7 +204,7 @@ int main() {
 
         //robot move control
         timi.SpeedControl(order);
-        timi.Move();
+        timi.Move(wall);
         cout << "order : " << order <<"\ncenter_pose : \n" << timi.center_pose
         << "\nl_speed : \t" << timi.l_speed << "\tr_speed : \t" << timi.r_speed<< endl;
 
