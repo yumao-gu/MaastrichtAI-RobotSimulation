@@ -11,6 +11,7 @@
 
 
 #define PI 3.1415926
+#define ROBOT_RADIOS 10
 
 using namespace std;
 using namespace Eigen;
@@ -64,6 +65,8 @@ public:
     double direction = 0.0;                 //angle to x-axis
     vector<Sensor> sensors;
     vector<double> sensors_data;
+    double map_x_max = 200 - ROBOT_RADIOS;
+    double map_y_max = 100 - ROBOT_RADIOS;
 
 private:
     double v_bound = 3.0;                   //max speed bound
@@ -110,33 +113,56 @@ public:
     }
 
     //robot movement update
-    void Move(DSegment wall)
+    void Move(vector<DSegment> virtual_wall_set)
     {
-        if(l_speed == r_speed)
+        if(l_speed == 0 && r_speed == 0)
         {
-            // to use center pose
-            DSegment virtual_wall(DPoint(wall.first.x()-5,wall.first.y()),DPoint(wall.second.x()-5,wall.second.y()));
-            double forward_distance = l_speed * delta_t;
-            double wall_angle = atan((wall.second.y() - wall.first.y())/(wall.second.x() - wall.first.x()));
-            DPoint forward_point(center_pose.x() + forward_distance * cos(direction),center_pose.y() + forward_distance * sin(direction));
-            DSegment forward_seg(DPoint(center_pose.x(),center_pose.y()),forward_point);
-            std::list<DPoint> intersction_Points;
+            return;
+        }
+        else if(l_speed + r_speed == 0)
+        {
+            OmegaCalculate();
+            direction += omega * delta_t;
+            return;
+        }
+        // to use center pose
+        double forward_distance = (l_speed + r_speed) / 2 * delta_t;
+        DPoint forward_point(center_pose.x() + forward_distance * cos(direction),center_pose.y() + forward_distance * sin(direction));
+        DSegment forward_seg(DPoint(center_pose.x(),center_pose.y()),forward_point);
+        double forward_angle = atan2((forward_seg.second.y() - forward_seg.first.y()),(forward_seg.second.x() - forward_seg.first.x()));
+        cout<< "forward_angle: " << forward_angle <<endl;
+        cout<< "sensors_data[forward_angle/PI*6]: " << sensors_data[(forward_angle - direction)/PI*6]  <<endl;
+
+        std::list<DPoint> intersction_Points;
+        double virtual_wall_angle;
+        for(DSegment virtual_wall : virtual_wall_set)
+        {
+            virtual_wall_angle = atan((virtual_wall.second.y() - virtual_wall.first.y())/(virtual_wall.second.x() - virtual_wall.first.x()));
             bg::intersection(virtual_wall, forward_seg, intersction_Points);
             cout<<"virtual_wall\t1x : " <<virtual_wall.first.x() << "\t1y : " <<virtual_wall.first.y()
-            <<"\t2x : " << virtual_wall.second.x()<<"\t2y : " << virtual_wall.second.y()<<endl;
+                <<"\t2x : " << virtual_wall.second.x()<<"\t2y : " << virtual_wall.second.y()<<endl;
             cout<<"forward_seg\t1x : " <<forward_seg.first.x() << "\t1y : " <<forward_seg.first.y()
                 <<"\t2x : " << forward_seg.second.x()<<"\t2y : " << forward_seg.second.y()<<endl;
-
             if(!intersction_Points.empty())
             {
-                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.x()));
+                break;
+            }
+        }
+        //DSegment virtual_wall(DPoint(wall.first.x()-5,wall.first.y()),DPoint(wall.second.x()-5,wall.second.y()));
+
+        if(l_speed == r_speed)
+        {
+            if(!intersction_Points.empty() && sensors_data[(forward_angle - direction)/PI*6] < 5 * ROBOT_RADIOS)
+            {
+                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.y()));
+                cout <<"size : "<< intersction_Points.size()<< "\tcollision_distance : " << collision_distance << endl;
                 double collision_time = collision_distance / l_speed;
                 double rest_time = delta_t - collision_time;
-                double collision_speed = l_speed * cos(wall_angle - direction);
+                double collision_speed = l_speed * cos(virtual_wall_angle - direction);
                 center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
-                Translation2d current_translation(collision_speed * rest_time * cos(wall_angle),collision_speed * rest_time * sin(wall_angle));
+                Translation2d current_translation(collision_speed * rest_time * cos(virtual_wall_angle),collision_speed * rest_time * sin(virtual_wall_angle));
                 center_pose = current_translation * center_pose;
-                cout<< "wall_angle: " << wall_angle <<" \trest_time : "<< rest_time
+                cout<< "wall_angle: " << virtual_wall_angle <<" \trest_time : "<< rest_time
                 <<"\tcollision_speed : "<< collision_speed <<"\tcollision_distance : "<< collision_distance<<"\tcollision_time : "<< collision_time<<endl;
             }
             else
@@ -147,17 +173,64 @@ public:
         }
         else
         {
-            RCalculate();
-            OmegaCalculate();
-            Translation2d ICC_to_center(R * cos(direction + 0.5 * PI),R * sin(direction + 0.5 * PI));
-            ICC = ICC_to_center * center_pose;
-            center_pose = Translation2d(ICC) * Rotation2Dd(omega * delta_t) * Translation2d(ICC).inverse() * center_pose;
-            direction += omega * delta_t;
+            if(!intersction_Points.empty() && sensors_data[(forward_angle - direction)/PI*6] < 5 * ROBOT_RADIOS)
+            {
+                double ave_speed = (r_speed + l_speed) / 2;
+                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.y()));
+                cout <<"size : "<< intersction_Points.size()<< "\tcollision_distance : " << collision_distance << endl;
+                double collision_time = collision_distance / ave_speed;
+                direction += omega * collision_time;
+                double rest_time = delta_t - collision_time;
+                double collision_speed = ave_speed * cos(virtual_wall_angle - direction);
+                center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
+                Translation2d current_translation(collision_speed * rest_time * cos(virtual_wall_angle),collision_speed * rest_time * sin(virtual_wall_angle));
+                center_pose = current_translation * center_pose;
+                cout<< "wall_angle: " << virtual_wall_angle <<" \trest_time : "<< rest_time
+                    <<"\tcollision_speed : "<< collision_speed <<"\tcollision_distance : "<< collision_distance<<"\tcollision_time : "<< collision_time<<endl;
+            }
+            else
+            {
+                RCalculate();
+                OmegaCalculate();
+                Translation2d ICC_to_center(R * cos(direction + 0.5 * PI),R * sin(direction + 0.5 * PI));
+                ICC = ICC_to_center * center_pose;
+                center_pose = Translation2d(ICC) * Rotation2Dd(omega * delta_t) * Translation2d(ICC).inverse() * center_pose;
+                direction += omega * delta_t;
+            }
         }
+        if(center_pose.x() > map_x_max)
+        {
+            center_pose.x() =  map_x_max;
+        }
+        if(center_pose.x() < -map_x_max)
+        {
+            center_pose.x() =  -map_x_max;
+        }
+        if(center_pose.y() > map_y_max)
+        {
+            center_pose.y() =  map_y_max;
+        }
+        if(center_pose.y() < -map_y_max)
+        {
+            center_pose.y() =  -map_y_max;
+        }
+        if(direction > 2 * PI)
+        {
+            direction -= 2*PI;
+        }
+        if(direction >  PI)
+        {
+            direction -= 2*PI;
+        }
+        if(direction < -PI)
+        {
+            direction += 2*PI;
+        }
+
     }
 
     //calculate the sensors data
-    void GetAllData(DSegment wall)
+    void GetAllData(vector<DSegment> wall_set)
     {
         for(int i = 0; i < 12; i++)
         {
@@ -167,8 +240,13 @@ public:
         cout<<"the sensors' data : ";
         for(int i = 0; i < 12; i++)
         {
-            sensors_data.push_back(sensors[i].GetData(wall));
-            cout<<sensors[i].GetData(wall)<<'\t';
+            double min_sensor_data = 200.0;
+            for(DSegment wall : wall_set)
+            {
+                min_sensor_data = min(min_sensor_data,sensors[i].GetData(wall));
+            }
+            sensors_data.push_back(min_sensor_data);
+            cout << "\t" << min_sensor_data;
         }
         cout<<endl;
     }
@@ -197,26 +275,39 @@ private:
 int main() {
     Robot timi;
     char order;
-    DSegment wall(DPoint(200,-100),DPoint(200,100));
+    DSegment virtual_wallN(DPoint(-200 ,100 - ROBOT_RADIOS),DPoint(200,100 - ROBOT_RADIOS));
+    DSegment virtual_wallS(DPoint(-200,-100 + ROBOT_RADIOS),DPoint(200,-100 + ROBOT_RADIOS));
+    DSegment virtual_wallW(DPoint(-200 + ROBOT_RADIOS,-100),DPoint(-200 + ROBOT_RADIOS,100));
+    DSegment virtual_wallE(DPoint(200 - ROBOT_RADIOS,-100),DPoint(200 - ROBOT_RADIOS,100));
+    vector<DSegment> virtual_wall_set = {virtual_wallN,virtual_wallS,virtual_wallW,virtual_wallE};
+
+    DSegment wallN(DPoint(-200 ,100 ),DPoint(200,100 ));
+    DSegment wallS(DPoint(-200,-100 ),DPoint(200,-100));
+    DSegment wallW(DPoint(-200 ,-100),DPoint(-200 ,100));
+    DSegment wallE(DPoint(200 ,-100),DPoint(200,100));
+    vector<DSegment> wall_set = {wallN,wallS,wallW,wallE};
 
     while(order != 27)
     {
 
-        //robot move control
-        timi.SpeedControl(order);
-        timi.Move(wall);
-        cout << "order : " << order <<"\ncenter_pose : \n" << timi.center_pose
-        << "\nl_speed : \t" << timi.l_speed << "\tr_speed : \t" << timi.r_speed<< endl;
-
         //get all the sensors data
         timi.ClearData();
-        timi.GetAllData(wall);
+        timi.GetAllData(wall_set);
+
+        //robot move control
+        timi.SpeedControl(order);
+        timi.Move(virtual_wall_set);
+        cout << "order : " << order <<"\ncenter_pose : \n" << timi.center_pose
+        << "\nl_speed : \t" << timi.l_speed << "\tr_speed : \t" << timi.r_speed<< endl;
 
         //visualization
         Mat img = Mat::zeros(Size(800, 600), CV_8UC3);
         img.setTo(255);
         Point p(timi.center_pose.x() + 400,timi.center_pose.y() + 300);
-        circle(img, p, 10, Scalar(0, 255, 0), -1);  //robot body
+        circle(img, p, ROBOT_RADIOS, Scalar(0, 255, 0), -1);  //robot body
+        line(img, Point(-200 + 400 , 100 + 300), Point(200 + 400 , 100 + 300), Scalar(0, 255, 255), 3);
+        line(img, Point(-200 + 400 , -100 + 300), Point(200 + 400 , -100 + 300), Scalar(0, 255, 255), 3);
+        line(img, Point(-200 + 400 , -100 + 300), Point(-200 + 400 , 100 + 300), Scalar(0, 255, 255), 3);
         line(img, Point(200 + 400 , -100 + 300), Point(200 + 400 , 100 + 300), Scalar(0, 255, 255), 3);
         imshow("robot simulation", img);
         order = waitKey(0);
