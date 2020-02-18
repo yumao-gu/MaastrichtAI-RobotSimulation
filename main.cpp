@@ -65,8 +65,6 @@ public:
     double direction = 0.0;                 //angle to x-axis
     vector<Sensor> sensors;
     vector<double> sensors_data;
-    double map_x_max = 200 - ROBOT_RADIOS;
-    double map_y_max = 100 - ROBOT_RADIOS;
 
 private:
     double v_bound = 3.0;                   //max speed bound
@@ -130,63 +128,67 @@ public:
         DPoint forward_point(center_pose.x() + forward_distance * cos(direction),center_pose.y() + forward_distance * sin(direction));
         DSegment forward_seg(DPoint(center_pose.x(),center_pose.y()),forward_point);
         double forward_angle = atan2((forward_seg.second.y() - forward_seg.first.y()),(forward_seg.second.x() - forward_seg.first.x()));
-        cout<< "forward_angle: " << forward_angle <<endl;
-        cout<< "sensors_data[forward_angle/PI*6]: " << sensors_data[(forward_angle - direction)/PI*6]  <<endl;
-
+        int forward_sensor_id =abs((int)((forward_angle - direction)/PI*6)%12);
+        //cout<< "forward_sensor_id: " << forward_sensor_id <<endl;
         std::list<DPoint> intersction_Points;
         double virtual_wall_angle;
-        for(DSegment virtual_wall : virtual_wall_set)
+        for(vector<DSegment>::iterator it = virtual_wall_set.begin(); it != virtual_wall_set.end();it++)
         {
+            DSegment virtual_wall = *it;
             virtual_wall_angle = atan((virtual_wall.second.y() - virtual_wall.first.y())/(virtual_wall.second.x() - virtual_wall.first.x()));
             bg::intersection(virtual_wall, forward_seg, intersction_Points);
-            cout<<"virtual_wall\t1x : " <<virtual_wall.first.x() << "\t1y : " <<virtual_wall.first.y()
-                <<"\t2x : " << virtual_wall.second.x()<<"\t2y : " << virtual_wall.second.y()<<endl;
-            cout<<"forward_seg\t1x : " <<forward_seg.first.x() << "\t1y : " <<forward_seg.first.y()
-                <<"\t2x : " << forward_seg.second.x()<<"\t2y : " << forward_seg.second.y()<<endl;
             if(!intersction_Points.empty())
             {
+                virtual_wall_set.erase(it);
                 break;
             }
         }
-        //DSegment virtual_wall(DPoint(wall.first.x()-5,wall.first.y()),DPoint(wall.second.x()-5,wall.second.y()));
 
-        if(l_speed == r_speed)
+        if(!intersction_Points.empty() && sensors_data[forward_sensor_id] < 5 * ROBOT_RADIOS)
         {
-            if(!intersction_Points.empty() && sensors_data[(forward_angle - direction)/PI*6] < 5 * ROBOT_RADIOS)
+            double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.y()));
+            double collision_time = collision_distance / l_speed;
+            double rest_time = delta_t - collision_time;
+            double collision_speed = l_speed * cos(virtual_wall_angle - direction);
+            center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
+            Translation2d current_translation(collision_speed * rest_time * cos(virtual_wall_angle),collision_speed * rest_time * sin(virtual_wall_angle));
+            Vector2d center_pose_2nd = current_translation * center_pose;
+            if(l_speed != r_speed)
             {
-                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.y()));
-                cout <<"size : "<< intersction_Points.size()<< "\tcollision_distance : " << collision_distance << endl;
-                double collision_time = collision_distance / l_speed;
-                double rest_time = delta_t - collision_time;
-                double collision_speed = l_speed * cos(virtual_wall_angle - direction);
-                center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
-                Translation2d current_translation(collision_speed * rest_time * cos(virtual_wall_angle),collision_speed * rest_time * sin(virtual_wall_angle));
-                center_pose = current_translation * center_pose;
-                cout<< "wall_angle: " << virtual_wall_angle <<" \trest_time : "<< rest_time
-                <<"\tcollision_speed : "<< collision_speed <<"\tcollision_distance : "<< collision_distance<<"\tcollision_time : "<< collision_time<<endl;
+                direction += omega * collision_time;
             }
-            else
+            for(DSegment virtual_wall : virtual_wall_set)
             {
-                Translation2d current_translation(l_speed * delta_t * cos(direction),l_speed * delta_t * sin(direction));
-                center_pose = current_translation * center_pose;
+                double virtual_wall_angle_2nd = atan((virtual_wall.second.y() - virtual_wall.first.y())/(virtual_wall.second.x() - virtual_wall.first.x()));
+                std::list<DPoint> intersction_Points_2nd;
+                DSegment forward_seg_2nd(DPoint(center_pose.x(),center_pose.y()),DPoint(center_pose_2nd.x(),center_pose_2nd.y()));
+                bg::intersection(virtual_wall, forward_seg_2nd, intersction_Points_2nd);
+//                cout << "forward_seg_2nd : " << "\t" << forward_seg_2nd.first.x() << "\t" << forward_seg_2nd.first.y()
+//                << "\t" << forward_seg_2nd.second.x() << "\t" << forward_seg_2nd.second.y() << endl;
+                if(intersction_Points_2nd.empty())
+                {
+                    continue;
+                }
+                else
+                {
+                    double collision_distance_2nd = bg::distance(intersction_Points_2nd.back(), DPoint(center_pose.x(), center_pose.y()));
+                    double collision_time_2nd = collision_distance_2nd / collision_speed;
+                    double rest_time_2nd = rest_time - collision_time_2nd;
+                    double collision_speed_2nd = collision_speed * cos(virtual_wall_angle_2nd - virtual_wall_angle);
+                    center_pose_2nd = {intersction_Points_2nd.back().x(),intersction_Points_2nd.back().y()};
+                    Translation2d current_translation_2nd(collision_speed_2nd * rest_time_2nd * cos(virtual_wall_angle_2nd),collision_speed_2nd * rest_time_2nd * sin(virtual_wall_angle_2nd));
+                    center_pose_2nd = current_translation_2nd * center_pose_2nd;
+                    break;
+                }
             }
+            center_pose = center_pose_2nd;
         }
         else
         {
-            if(!intersction_Points.empty() && sensors_data[(forward_angle - direction)/PI*6] < 5 * ROBOT_RADIOS)
+            if(l_speed == r_speed)
             {
-                double ave_speed = (r_speed + l_speed) / 2;
-                double collision_distance = bg::distance(intersction_Points.back(), DPoint(center_pose.x(), center_pose.y()));
-                cout <<"size : "<< intersction_Points.size()<< "\tcollision_distance : " << collision_distance << endl;
-                double collision_time = collision_distance / ave_speed;
-                direction += omega * collision_time;
-                double rest_time = delta_t - collision_time;
-                double collision_speed = ave_speed * cos(virtual_wall_angle - direction);
-                center_pose = {intersction_Points.back().x(),intersction_Points.back().y()};
-                Translation2d current_translation(collision_speed * rest_time * cos(virtual_wall_angle),collision_speed * rest_time * sin(virtual_wall_angle));
+                Translation2d current_translation(l_speed * delta_t * cos(direction),l_speed * delta_t * sin(direction));
                 center_pose = current_translation * center_pose;
-                cout<< "wall_angle: " << virtual_wall_angle <<" \trest_time : "<< rest_time
-                    <<"\tcollision_speed : "<< collision_speed <<"\tcollision_distance : "<< collision_distance<<"\tcollision_time : "<< collision_time<<endl;
             }
             else
             {
@@ -198,26 +200,7 @@ public:
                 direction += omega * delta_t;
             }
         }
-        if(center_pose.x() > map_x_max)
-        {
-            center_pose.x() =  map_x_max;
-        }
-        if(center_pose.x() < -map_x_max)
-        {
-            center_pose.x() =  -map_x_max;
-        }
-        if(center_pose.y() > map_y_max)
-        {
-            center_pose.y() =  map_y_max;
-        }
-        if(center_pose.y() < -map_y_max)
-        {
-            center_pose.y() =  -map_y_max;
-        }
-        if(direction > 2 * PI)
-        {
-            direction -= 2*PI;
-        }
+
         if(direction >  PI)
         {
             direction -= 2*PI;
@@ -226,7 +209,6 @@ public:
         {
             direction += 2*PI;
         }
-
     }
 
     //calculate the sensors data
@@ -235,7 +217,6 @@ public:
         for(int i = 0; i < 12; i++)
         {
             sensors.push_back(Sensor(direction + i * PI / 6,this->center_pose));
-            //cout << "init_pose : "<<this->center_pose.x()<< '\t' <<this->center_pose.x() <<endl;
         }
         cout<<"the sensors' data : ";
         for(int i = 0; i < 12; i++)
@@ -275,10 +256,10 @@ private:
 int main() {
     Robot timi;
     char order;
-    DSegment virtual_wallN(DPoint(-200 ,100 - ROBOT_RADIOS),DPoint(200,100 - ROBOT_RADIOS));
-    DSegment virtual_wallS(DPoint(-200,-100 + ROBOT_RADIOS),DPoint(200,-100 + ROBOT_RADIOS));
-    DSegment virtual_wallW(DPoint(-200 + ROBOT_RADIOS,-100),DPoint(-200 + ROBOT_RADIOS,100));
-    DSegment virtual_wallE(DPoint(200 - ROBOT_RADIOS,-100),DPoint(200 - ROBOT_RADIOS,100));
+    DSegment virtual_wallN(DPoint(-200 + ROBOT_RADIOS,100 - ROBOT_RADIOS),DPoint(200 - ROBOT_RADIOS,100 - ROBOT_RADIOS));
+    DSegment virtual_wallS(DPoint(-200 + ROBOT_RADIOS,-100 + ROBOT_RADIOS),DPoint(200 - ROBOT_RADIOS,-100 + ROBOT_RADIOS));
+    DSegment virtual_wallW(DPoint(-200 + ROBOT_RADIOS,-100 + ROBOT_RADIOS),DPoint(-200 + ROBOT_RADIOS,100 - ROBOT_RADIOS));
+    DSegment virtual_wallE(DPoint(200 - ROBOT_RADIOS,-100 + ROBOT_RADIOS),DPoint(200 - ROBOT_RADIOS,100 - ROBOT_RADIOS));
     vector<DSegment> virtual_wall_set = {virtual_wallN,virtual_wallS,virtual_wallW,virtual_wallE};
 
     DSegment wallN(DPoint(-200 ,100 ),DPoint(200,100 ));
@@ -289,7 +270,7 @@ int main() {
 
     while(order != 27)
     {
-
+        std::cout << "BEGIN A NEW STEP !" << std::endl;
         //get all the sensors data
         timi.ClearData();
         timi.GetAllData(wall_set);
